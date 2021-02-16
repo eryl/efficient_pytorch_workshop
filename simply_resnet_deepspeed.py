@@ -8,7 +8,7 @@ import numpy as np
 from torch import nn
 import torch
 from torch.utils.data import DataLoader
-from torch.optim import Adam
+from torch.optim import AdamW
 from torchvision import transforms
 from torchvision.models import resnet152, resnet18, alexnet
 from torchvision.datasets.folder import VisionDataset, ImageFolder, default_loader, make_dataset
@@ -129,7 +129,7 @@ def main():
 
     train_set, dev_set, test_set = make_datasets(args.images, rng=rng)
 
-    batch_size = 4
+    batch_size = 8
     max_epochs = 1
 
     dataloader_kwargs = dict()
@@ -150,7 +150,7 @@ def main():
     model.to(device)
 
     loss_fn = nn.CrossEntropyLoss()
-    optimizer = Adam(model.parameters(), lr=1e-3, weight_decay=3e-7)
+    optimizer = AdamW(model.parameters(), lr=1e-4)
 
     for epoch in range(max_epochs):
         if args.pipeline_batch:
