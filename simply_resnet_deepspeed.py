@@ -13,6 +13,7 @@ from torchvision import transforms
 from torchvision.models import resnet152, resnet18, alexnet
 from torchvision.datasets.folder import VisionDataset, ImageFolder, default_loader, make_dataset
 import matplotlib.pyplot as plt
+import deepspeed
 
 from tqdm import tqdm
 
@@ -113,6 +114,13 @@ def main():
     parser.add_argument('--pin-memory', default=False, action='store_true')
     parser.add_argument('--num-workers', type=int)
     parser.add_argument('--prefetch-factor', type=int)
+    parser.add_argument('--local_rank',
+                        type=int,
+                        default=-1,
+                        help='local rank passed from distributed launcher')
+    # Include DeepSpeed configuration arguments
+    parser = deepspeed.add_config_arguments(parser)
+
     args = parser.parse_args()
 
     rng = np.random.default_rng(1729)
@@ -139,31 +147,41 @@ def main():
         dataloader_kwargs['num_workers'] = args.num_workers
     if args.prefetch_factor:
         dataloader_kwargs['prefetch_factor'] = args.num_workers
-    training_loader = DataLoader(train_set, batch_size=batch_size, **dataloader_kwargs)
-    dev_loader = DataLoader(dev_set, batch_size=batch_size, **dataloader_kwargs)
-    test_loader = DataLoader(test_set, batch_size=batch_size, **dataloader_kwargs)
 
     model = resnet152(pretrained=False, num_classes=train_set.num_classes)
     #model = resnet18(pretrained=False, num_classes=train_set.num_classes)
     #model = LogisticRegression(train_set[0][0].shape, train_set.num_classes)
     #model = alexnet(pretrained=False, num_classes=train_set.num_classes)
-    model.to(device)
+
+    model_engine, optimizer, _, __ = deepspeed.initialize(args=args,
+                                                          model=model,
+                                                          model_parameters=model.parameters())
+    training_loader = model_engine.deepspeed_io(train_set, **dataloader_kwargs)
+    dev_loader = model_engine.deepspeed_io(dev_set, **dataloader_kwargs)
+    test_loader = model_engine.deepspeed_io(test_set, **dataloader_kwargs)
 
     loss_fn = nn.CrossEntropyLoss()
-    optimizer = AdamW(model.parameters(), lr=1e-4)
+    #optimizer = AdamW(model.parameters(), lr=1e-4)
 
     for epoch in range(max_epochs):
-        if args.pipeline_batch:
-            pipelined_training_loop(model, loss_fn, training_loader, optimizer, device)
-        else:
-            normal_training_loop(model, loss_fn, training_loader, optimizer, device)
+        training_losses = []
+        for x, y in tqdm(training_loader, desc='training progress'):
+            #optimizer.zero_grad()
+            prediction = model_engine(x.to(model_engine.local_rank))
+            loss = loss_fn(prediction, y.to(model_engine.local_rank))
+            #loss.backward()
+            #optimizer.step()
+            model_engine.backward(loss)
+            model_engine.step()
+            training_losses.append(loss.item())
+        print(f'Training loss: {np.mean(training_losses)}')
 
         val_losses = []
         model.eval()
         with torch.no_grad():
             for x,y in dev_loader:
-                prediction = model(x.to(device))
-                loss = loss_fn(prediction, y.to(device))
+                prediction = model(x.to(model_engine.local_rank))
+                loss = loss_fn(prediction, y.to(model_engine.local_rank))
                 val_losses.append(loss.item())
         print(f'Validation loss: {np.mean(val_losses)}')
 
@@ -171,51 +189,12 @@ def main():
     model.eval()
     with torch.no_grad():
         for x,y in test_loader:
-            prediction = model(x.to(device))
-            correct = torch.argmax(prediction, dim=-1) == y.to(device)
+            prediction = model(x.to(model_engine.local_rank))
+            correct = torch.argmax(prediction, dim=-1) == y.to(model_engine.local_rank)
             test_match.extend(correct.cpu().tolist())
 
     print(f'Test accuracy: {np.mean(test_match)}')
 
-@profile
-def normal_training_loop(model, loss_fn, training_loader, optimizer, device):
-    training_losses = []
-    for x, y in tqdm(training_loader, desc='training progress'):
-        optimizer.zero_grad()
-        prediction = model(x.to(device))
-        loss = loss_fn(prediction, y.to(device))
-        loss.backward()
-        optimizer.step()
-        training_losses.append(loss.item())
-    print(f'Training loss: {np.mean(training_losses)}')
-
-
-def pipelined_training_loop(model, loss_fn, training_loader, optimizer, device):
-    training_losses = []
-    model.train()
-    batch_iter = iter(training_loader)
-    current_x, current_y = next(batch_iter)
-    current_x = current_x.to(device)
-    current_y = current_y.to(device)
-    for next_x, next_y in tqdm(batch_iter, desc='training progress', total=len(training_loader) - 1):
-        next_x = next_x.to(device)
-        next_y = next_y.to(device)
-
-        optimizer.zero_grad()
-        prediction = model(current_x)
-        loss = loss_fn(prediction, current_y)
-        loss.backward()
-        optimizer.step()
-        training_losses.append(loss.item())
-        current_x = next_x
-        current_y = next_y
-    optimizer.zero_grad()
-    prediction = model(current_x)
-    loss = loss_fn(prediction, current_y)
-    loss.backward()
-    optimizer.step()
-    training_losses.append(loss.item())
-    print(f'Training loss: {np.mean(training_losses)}')
 
 if __name__ == '__main__':
     main()
