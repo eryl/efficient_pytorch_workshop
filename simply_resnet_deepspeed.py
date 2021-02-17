@@ -114,10 +114,7 @@ def main():
     parser.add_argument('--pin-memory', default=False, action='store_true')
     parser.add_argument('--num-workers', type=int)
     parser.add_argument('--prefetch-factor', type=int)
-    parser.add_argument('--local_rank',
-                        type=int,
-                        default=-1,
-                        help='local rank passed from distributed launcher')
+    parser.add_argument('--local_rank', type=int, default=-1, help='local rank passed from distributed launcher')
     # Include DeepSpeed configuration arguments
     parser = deepspeed.add_config_arguments(parser)
 
