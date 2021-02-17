@@ -165,7 +165,8 @@ def main():
 
     for epoch in range(max_epochs):
         training_losses = []
-        for x, y in tqdm(training_loader, desc='training progress'):
+        model_engine.train()
+        for x, y in tqdm(training_loader, desc='training progress', total=len(training_loader)):
             #optimizer.zero_grad()
             prediction = model_engine(x.to(model_engine.local_rank))
             loss = loss_fn(prediction, y.to(model_engine.local_rank))
@@ -177,7 +178,7 @@ def main():
         print(f'Training loss: {np.mean(training_losses)}')
 
         val_losses = []
-        model.eval()
+        model_engine.eval()
         with torch.no_grad():
             for x,y in dev_loader:
                 prediction = model(x.to(model_engine.local_rank))
@@ -186,7 +187,7 @@ def main():
         print(f'Validation loss: {np.mean(val_losses)}')
 
     test_match = []
-    model.eval()
+    model_engine.eval()
     with torch.no_grad():
         for x,y in test_loader:
             prediction = model(x.to(model_engine.local_rank))
