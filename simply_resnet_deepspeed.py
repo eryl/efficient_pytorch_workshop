@@ -129,6 +129,7 @@ def main():
             raise RuntimeError(f"CUDA not available and device set to {args.device}")
         else:
             device = torch.device(args.device)
+            torch.backends.cudnn.benchmark = True
 
     print(f"Device is set to {device}")
 
