@@ -104,11 +104,11 @@ def imshow(img):
     plt.imshow(np.transpose(npimg, (1, 2, 0)))
     plt.show()
 
-
+@profile
 def main():
     parser = argparse.ArgumentParser(description='Simple Resnet training examaple')
     parser.add_argument('images', type=Path)
-    parser.add_argument('--pipeline-batch', default=False, action='store_true')
+    #parser.add_argument('--pipeline-batch', default=False, action='store_true')
     parser.add_argument('--device', default='cpu')
     parser.add_argument('--pin-memory', default=False, action='store_true')
     parser.add_argument('--num-workers', type=int)
@@ -124,6 +124,7 @@ def main():
             raise RuntimeError(f"CUDA not available and device set to {args.device}")
         else:
             device = torch.device(args.device)
+            torch.backends.cudnn.benchmark = True
 
     print(f"Device is set to {device}")
 
@@ -153,10 +154,16 @@ def main():
     optimizer = Adam(model.parameters(), lr=1e-3, weight_decay=3e-7)
 
     for epoch in range(max_epochs):
-        if args.pipeline_batch:
-            pipelined_training_loop(model, loss_fn, training_loader, optimizer, device)
-        else:
-            normal_training_loop(model, loss_fn, training_loader, optimizer, device)
+        training_losses = []
+        for x, y in tqdm(training_loader, desc='training progress'):
+            optimizer.zero_grad()
+            x = x.to(device)
+            prediction = model(x)
+            loss = loss_fn(prediction, y.to(device))
+            loss.backward()
+            optimizer.step()
+            training_losses.append(loss.item())
+        print(f'Training loss: {np.mean(training_losses)}')
 
         val_losses = []
         model.eval()
@@ -177,20 +184,14 @@ def main():
 
     print(f'Test accuracy: {np.mean(test_match)}')
 
-@profile
-def normal_training_loop(model, loss_fn, training_loader, optimizer, device):
-    training_losses = []
-    for x, y in tqdm(training_loader, desc='training progress'):
-        optimizer.zero_grad()
-        prediction = model(x.to(device))
-        loss = loss_fn(prediction, y.to(device))
-        loss.backward()
-        optimizer.step()
-        training_losses.append(loss.item())
-    print(f'Training loss: {np.mean(training_losses)}')
 
+def normal_training_loop(model, loss_fn, training_loader, optimizer, device):
+    pass
 
 def pipelined_training_loop(model, loss_fn, training_loader, optimizer, device):
+    # This experiments with making the call of torch.tensor.to(device) on the iteration before the batch will be used
+    # the idea is to hide the latency of the data transfer but this doesn't seem to work as intended (there is no
+    # difference in runtime).
     training_losses = []
     model.train()
     batch_iter = iter(training_loader)
